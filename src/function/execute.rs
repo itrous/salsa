@@ -382,10 +382,25 @@ impl MemoHeader {
         // b) It's guaranteed that this query will panic again anyway.
         // That's why we simply propagate the panic here. It simplifies our lives and it also avoids duplicate panic messages.
         if !has_value {
-            tracing::warn!(
-                "Propagating panic for cycle head that panicked in an earlier execution in that revision"
-            );
-            Cancelled::PropagatedPanic.throw();
+            // A *final* memo without a value is an LRU-evicted one whose
+            // `verified_at` was later stamped by shallow/deep verification
+            // (`mark_as_verified` does not restore the value): re-execute it
+            // from scratch instead of propagating a panic that never happened.
+            //
+            // A valueless *provisional* memo is treated as a poisoned cycle
+            // head (`PoisonProvisionalIfPanicking` inserts a valueless
+            // `fixpoint_initial` memo). This is a one-way test, not a full
+            // poison-vs-eviction discriminator — provisional memos are
+            // evictable too — but an evicted provisional memo cannot cross a
+            // revision boundary, stay provisional, and re-acquire the current
+            // verification stamp, so it cannot reach this branch.
+            if self.may_be_provisional() {
+                tracing::warn!(
+                    "Propagating panic for cycle head that panicked in an earlier execution in that revision"
+                );
+                Cancelled::PropagatedPanic.throw();
+            }
+            return None;
         }
 
         Some(PreviousIteration {
